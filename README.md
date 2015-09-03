@@ -1,4 +1,4 @@
-# Nagios plugin to query available Windows Updates and alert based on last succesful update date
+# Nagios plugin to query available Windows Updates and alert based on last successful update date
 
 ### Idea
 
