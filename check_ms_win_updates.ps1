@@ -1,15 +1,16 @@
 ﻿# Script name:		check_ms_win_updates.ps1
-# Version:			v1.01.150903
+# Version:			v1.06.150907
 # Created on:		12/05/2015
 # Author:			D'Haese Willem
 # Purpose:			Checks a Microsoft Windows Server for pending updates and alert in Nagios style output if a number of days is exceeded.
 # On Github:		https://github.com/willemdh/check_ms_win_updates
-# On OutsideIT:		http://outsideit.net/check-ms-win-updates/
+# On OutsideIT:		http://outsideit.net/check-ms-win-updates
 # Recent History:
 #	12/05/15 => Creation date
 #	05/08/15 => Removed @() from import-clixml and counts, subtraction for other
 #	06/08/15 => Edite message and severity if lastsuccestime was not found in the registry
 #	03/09/15 => Cleanup and proper Nagios plugin parameter verification
+#	07/09/15 => Convert lastsuccessful update date to local timezone and only removes cachefile when reboot required if cache older then 1 hour.
 # Copyright:
 #	This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published
 #	by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. This program is distributed 
@@ -31,6 +32,7 @@ $WsusStruct = New-object PSObject -Property @{
 	ReturnString = 'UNKNOWN: Please debug the script...'
 }
 
+[void][System.Reflection.Assembly]::LoadWithPartialName('System.Core')
 $VerbosePreference = 'SilentlyContinue'
 
 #region Functions
@@ -154,6 +156,14 @@ Arguments:
     Exit $WsusStruct.ExitCode;
 } 
 
+
+Function Get-LocalTime($UTCTime) {
+    $strCurrentTimeZone = (Get-WmiObject win32_timezone).StandardName
+    $TZ = [System.TimeZoneInfo]::FindSystemTimeZoneById($strCurrentTimeZone)
+    $LocalTime = [System.TimeZoneInfo]::ConvertTimeFromUtc($UTCTime, $TZ)
+    Return $LocalTime
+}
+
 Function Search-Updates { 
 
     if (!(Test-path -Path 'C:\Program Files\NSClient++\scripts\powershell\cache')){
@@ -163,7 +173,13 @@ Function Search-Updates {
     $LastSuccessTimeFolder = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Install'
     if (Test-Path $LastSuccessTimeFolder) {
 	    $LastSuccessTimeValue = Get-ItemProperty -Path $LastSuccessTimeFolder -Name LastSuccessTime | Select-Object -ExpandProperty LastSuccessTime
-	    $WsusStruct.LastSuccesTime = Get-date "$LastSuccessTimeValue"
+		try {
+	    	$WsusStruct.LastSuccesTime = Get-LocalTime (Get-date "$LastSuccessTimeValue")
+		}
+		catch {
+			Write-Log Verbose Warning "Unable to use [System.TimeZoneInfo]."
+			$WsusStruct.LastSuccesTime = Get-date "$LastSuccessTimeValue"
+		}
     }
     else {
 	    Write-Host 'LastSuccesTime value not found in the registry. This server was probably never updated. Or your custom WSUS Update solution does not update the LastSuccesTime registry value.'
@@ -172,7 +188,7 @@ Function Search-Updates {
     $RebootRequiredKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
     if (Test-Path $RebootRequiredKey){ 
 	    $RebootRequired = $true
-	    if (Test-Path $WsusStruct.UpdateCacheFile) {
+	    if ((Test-Path $WsusStruct.UpdateCacheFile) -and (Get-Date) -gt ((Get-Item $WsusStruct.UpdateCacheFile).LastWriteTime.AddHours(1))) {
 		    Remove-Item $WsusStruct.UpdateCacheFile | Out-Null
 	    }
     }
@@ -234,8 +250,10 @@ Function Search-Updates {
 
 # Main block
 
+if ($Args) {
 if($Args[0].ToString() -ne "$ARG1$"){
 	if($Args.count -ge 1){Initialize-Args $Args}
+}
 }
 Search-Updates
 
