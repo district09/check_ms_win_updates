@@ -173,6 +173,9 @@ Function Search-Updates {
     $LastSuccessTimeFolder = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Install'
     if (Test-Path $LastSuccessTimeFolder) {
 	    $LastSuccessTimeValue = Get-ItemProperty -Path $LastSuccessTimeFolder -Name LastSuccessTime | Select-Object -ExpandProperty LastSuccessTime
+		if ($LastSuccessTimeValue -eq '') {
+            Write-Log Verbose Warning 'LastSuccesTime value is an empty string.'
+        }
 		try {
 	    	$WsusStruct.LastSuccesTime = Get-LocalTime (Get-date "$LastSuccessTimeValue")
 		}
