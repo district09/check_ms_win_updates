@@ -1,16 +1,16 @@
 ﻿# Script name:		check_ms_win_updates.ps1
-# Version:			v1.06.150907
+# Version:			v1.07.151112
 # Created on:		12/05/2015
 # Author:			D'Haese Willem
 # Purpose:			Checks a Microsoft Windows Server for pending updates and alert in Nagios style output if a number of days is exceeded.
 # On Github:		https://github.com/willemdh/check_ms_win_updates
 # On OutsideIT:		http://outsideit.net/check-ms-win-updates
 # Recent History:
-#	12/05/15 => Creation date
 #	05/08/15 => Removed @() from import-clixml and counts, subtraction for other
 #	06/08/15 => Edite message and severity if lastsuccestime was not found in the registry
 #	03/09/15 => Cleanup and proper Nagios plugin parameter verification
 #	07/09/15 => Convert lastsuccessful update date to local timezone and only removes cachefile when reboot required if cache older then 1 hour.
+#	12/11/15 => Check if registry string lastsuccesstime exists
 # Copyright:
 #	This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published
 #	by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. This program is distributed 
@@ -173,19 +173,22 @@ Function Search-Updates {
     $LastSuccessTimeFolder = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Install'
     if (Test-Path $LastSuccessTimeFolder) {
 	    $LastSuccessTimeValue = Get-ItemProperty -Path $LastSuccessTimeFolder -Name LastSuccessTime | Select-Object -ExpandProperty LastSuccessTime
-		if ($LastSuccessTimeValue -eq '') {
-            Write-Log Verbose Warning 'LastSuccesTime value is an empty string.'
-        }
-		try {
-	    	$WsusStruct.LastSuccesTime = Get-LocalTime (Get-date "$LastSuccessTimeValue")
+		if ($LastSuccessTimeValue) { 
+		    try {
+	    	    $WsusStruct.LastSuccesTime = Get-LocalTime (Get-date "$LastSuccessTimeValue")
+		    }
+		    catch {
+			    Write-Log Verbose Warning 'Unable to use [System.TimeZoneInfo].'
+			    $WsusStruct.LastSuccesTime = Get-date "$LastSuccessTimeValue"
+		    }
 		}
-		catch {
-			Write-Log Verbose Warning "Unable to use [System.TimeZoneInfo]."
-			$WsusStruct.LastSuccesTime = Get-date "$LastSuccessTimeValue"
+		else {
+	    	Write-Host 'String LastSuccessTime not found in the registry. This server was probably never updated or your custom WSUS Update solution does not create this string.'
+	    	$WsusStruct.LastSuccesTime = Get-date '2015-01-01 00:00:01'            
 		}
     }
     else {
-	    Write-Host 'LastSuccesTime value not found in the registry. This server was probably never updated. Or your custom WSUS Update solution does not update the LastSuccesTime registry value.'
+	    Write-Host 'Install key not found in the registry. This server was probably never updated or your custom WSUS Update solution does not create this key.'
 	    $WsusStruct.LastSuccesTime = Get-date '2015-01-01 00:00:01'
     }
     $RebootRequiredKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
