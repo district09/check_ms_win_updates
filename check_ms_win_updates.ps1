@@ -1,16 +1,16 @@
 ﻿# Script name:		check_ms_win_updates.ps1
-# Version:			v1.07.151112
+# Version:			v1.05.151206
 # Created on:		12/05/2015
 # Author:			D'Haese Willem
 # Purpose:			Checks a Microsoft Windows Server for pending updates and alert in Nagios style output if a number of days is exceeded.
 # On Github:		https://github.com/willemdh/check_ms_win_updates
 # On OutsideIT:		http://outsideit.net/check-ms-win-updates
 # Recent History:
-#	05/08/15 => Removed @() from import-clixml and counts, subtraction for other
 #	06/08/15 => Edite message and severity if lastsuccestime was not found in the registry
 #	03/09/15 => Cleanup and proper Nagios plugin parameter verification
 #	07/09/15 => Convert lastsuccessful update date to local timezone and only removes cachefile when reboot required if cache older then 1 hour.
 #	12/11/15 => Check if registry string lastsuccesstime exists
+#	06/12/15 => Prepare for Windows 10 support with PSWindowsUpdate
 # Copyright:
 #	This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published
 #	by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. This program is distributed 
@@ -156,7 +156,6 @@ Arguments:
     Exit $WsusStruct.ExitCode;
 } 
 
-
 Function Get-LocalTime($UTCTime) {
     $strCurrentTimeZone = (Get-WmiObject win32_timezone).StandardName
     $TZ = [System.TimeZoneInfo]::FindSystemTimeZoneById($strCurrentTimeZone)
@@ -170,27 +169,38 @@ Function Search-Updates {
 	    New-Item -Path 'C:\Program Files\NSClient++\scripts\powershell\cache' -Type directory -Force | Out-Null
     }
 
-    $LastSuccessTimeFolder = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Install'
-    if (Test-Path $LastSuccessTimeFolder) {
-	    $LastSuccessTimeValue = Get-ItemProperty -Path $LastSuccessTimeFolder -Name LastSuccessTime | Select-Object -ExpandProperty LastSuccessTime
-		if ($LastSuccessTimeValue) { 
-		    try {
-	    	    $WsusStruct.LastSuccesTime = Get-LocalTime (Get-date "$LastSuccessTimeValue")
-		    }
-		    catch {
-			    Write-Log Verbose Warning 'Unable to use [System.TimeZoneInfo].'
-			    $WsusStruct.LastSuccesTime = Get-date "$LastSuccessTimeValue"
-		    }
-		}
-		else {
-	    	Write-Host 'String LastSuccessTime not found in the registry. This server was probably never updated or your custom WSUS Update solution does not create this string.'
-	    	$WsusStruct.LastSuccesTime = Get-date '2015-01-01 00:00:01'            
-		}
+    if (([System.Environment]::OSVersion.Version).Major -ge 10){
+    
+        Write-Log Verbose Info 'Windows 10 has no LastSuccessTime in the registry.'
+       
     }
     else {
-	    Write-Host 'Install key not found in the registry. This server was probably never updated or your custom WSUS Update solution does not create this key.'
-	    $WsusStruct.LastSuccesTime = Get-date '2015-01-01 00:00:01'
+        Write-Host "Other OS detected: $(([System.Environment]::OSVersion.Version).Major)"
+        $LastSuccessTimeFolder = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Install'
+        if (Test-Path $LastSuccessTimeFolder) {
+	        $LastSuccessTimeValue = Get-ItemProperty -Path $LastSuccessTimeFolder -Name LastSuccessTime | Select-Object -ExpandProperty LastSuccessTime
+		    if ($LastSuccessTimeValue) { 
+		        try {
+	    	        $WsusStruct.LastSuccesTime = Get-LocalTime (Get-date "$LastSuccessTimeValue")
+		        }
+		        catch {
+			        Write-Log Verbose Warning 'Unable to use [System.TimeZoneInfo].'
+			        $WsusStruct.LastSuccesTime = Get-date "$LastSuccessTimeValue"
+		        }
+		    }
+		    else {
+	    	    Write-Host 'String LastSuccessTime not found in the registry. This server was probably never updated or your custom WSUS Update solution does not create this string.'
+	    	    $WsusStruct.LastSuccesTime = Get-date '2015-01-01 00:00:01'            
+		    }
+        }
+        else {
+	        Write-Host 'Install key not found in the registry. This server was probably never updated or your custom WSUS Update solution does not create this key.'
+	        $WsusStruct.LastSuccesTime = Get-date '2015-01-01 00:00:01'
+        }
     }
+
+
+
     $RebootRequiredKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
     if (Test-Path $RebootRequiredKey){ 
 	    $RebootRequired = $true
@@ -230,24 +240,30 @@ Function Search-Updates {
         $Total = $Other = 0
     }
     $WsusStruct.ReturnString =''
-    $WarningLimit = ($WsusStruct.LastSuccesTime).AddDays($WsusStruct.DaysBeforeWarning)
-    $CriticalLimit = ($WsusStruct.LastSuccesTime).AddDays($WsusStruct.DaysBeforeCritical)
-    $LastSuccesTimeStr = ($WsusStruct.LastSuccesTime).ToString('yyyy/MM/dd HH:mm:ss')
-    if($CriticalLimit -lt (Get-Date)) {
-	    $WsusStruct.ReturnString += "CRITICAL: Last succesful update at $LastSuccesTimeStr exceeded critical threshold of $($WsusStruct.DaysBeforeCritical) days. " 
-	    $WsusStruct.Exitcode = 2
+    if (([System.Environment]::OSVersion.Version).Major -lt 10){
+        $WarningLimit = ($WsusStruct.LastSuccesTime).AddDays($WsusStruct.DaysBeforeWarning)
+        $CriticalLimit = ($WsusStruct.LastSuccesTime).AddDays($WsusStruct.DaysBeforeCritical)
+        $LastSuccesTimeStr = ($WsusStruct.LastSuccesTime).ToString('yyyy/MM/dd HH:mm:ss')
+        if($CriticalLimit -lt (Get-Date)) {
+	        $WsusStruct.ReturnString += "CRITICAL: Last successful update at $LastSuccesTimeStr exceeded critical threshold of $($WsusStruct.DaysBeforeCritical) days. " 
+	        $WsusStruct.Exitcode = 2
+        }
+        elseif($WarningLimit -lt (Get-Date)) {
+	        $WsusStruct.ReturnString += "WARNING: Last successful update at $LastSuccesTimeStr exceeded warning threshold of $($WsusStruct.DaysBeforeWarning) days. " 
+	        $WsusStruct.Exitcode = 1
+        }
+        elseif ($RebootRequired) {
+	        $WsusStruct.ReturnString += "WARNING: Reboot required. Last successful update: $LastSuccesTimeStr. "
+	        $WsusStruct.Exitcode = 1
+        }
+        else {
+	        $WsusStruct.ReturnString += "OK: Last successful update: $LastSuccesTimeStr. "
+	        $WsusStruct.Exitcode = 0
+        }
     }
-    elseif($WarningLimit -lt (Get-Date)) {
-	    $WsusStruct.ReturnString += "WARNING: Last succesful update at $LastSuccesTimeStr exceeded warning threshold of $($WsusStruct.DaysBeforeWarning) days. " 
-	    $WsusStruct.Exitcode = 1
-    }
-    elseif ($RebootRequired) {
-	    $WsusStruct.ReturnString += "WARNING: Reboot required. Last succesful update: $LastSuccesTimeStr. "
-	    $WsusStruct.Exitcode = 1
-    }
-    else {
-	    $WsusStruct.ReturnString += "OK: Last succesful update: $LastSuccesTimeStr. "
-	    $WsusStruct.Exitcode = 0
+    else { 
+        $WsusStruct.ReturnString += 'Unable to detect last successful update. '
+        $WsusStruct.Exitcode = 0
     }
     $WsusStruct.ReturnString += "Pending updates {Total: $Total {Critical: $Critical}{Important: $Important}{Other: $Other}}"
 }
@@ -257,10 +273,11 @@ Function Search-Updates {
 # Main block
 
 if ($Args) {
-if($Args[0].ToString() -ne "$ARG1$"){
-	if($Args.count -ge 1){Initialize-Args $Args}
+    if(!($Args[0].ToString()).StartsWith("$")){
+	    if($Args.count -ge 1){Initialize-Args $Args}
+    }
 }
-}
+
 Search-Updates
 
 Write-Host $WsusStruct.ReturnString
