@@ -1,5 +1,5 @@
 ﻿# Script name:      check_ms_win_updates.ps1
-# Version:	        v1.08.160119
+# Version:	        v2.01.160119
 # Created on:       12/05/2015
 # Author:	        D'Haese Willem
 # Purpose:	        Checks a Microsoft Windows Server for pending updates and alert in Nagios style output if a number of days is exceeded.
@@ -10,7 +10,7 @@
 #   12/11/15 => Check if registry string lastsuccesstime exists
 #   06/12/15 => Prepare for Windows 10 support with PSWindowsUpdate
 #   07/12/15 => Output to VerboseOther OS
-#   19/01/16 => Cleanup and updated Write-Log, prep for PSWindowsUpdate Method
+#   19/01/16 => PSWindowsUpdate Method
 # Copyright:
 #   This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published
 #   by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. This program is distributed 
@@ -29,7 +29,7 @@ $WsusStruct = New-object PSObject -Property @{
     LastSuccesTime = '';
     DaysBeforeWarning = 120;
     DaysBeforeCritical = 150;
-    NumberOfUpdatesPending = '';
+    NumberOfUpdates = '';
     ReturnString = 'UNKNOWN: Please debug the script...'
 }
 
@@ -194,37 +194,33 @@ Function Get-LocalTime {
     $LocalTime = [System.TimeZoneInfo]::ConvertTimeFromUtc($UTCTime, $TZ)
     Return $LocalTime
 }
-Function Search-Updates { 
+Function Search-WithUpdateSearcher { 
     if (!(Test-path -Path 'C:\Program Files\NSClient++\scripts\powershell\cache')){
         New-Item -Path 'C:\Program Files\NSClient++\scripts\powershell\cache' -Type directory -Force | Out-Null
     }
-    if (([System.Environment]::OSVersion.Version).Major -ge 10){  
-        Write-Log Verbose Info 'Windows 10 has no LastSuccessTime in the registry.'     
-    }
-    else {
-        Write-Log Verbose Info "Other OS detected: $(([System.Environment]::OSVersion.Version).Major)"
-        $LastSuccessTimeFolder = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Install'
-        if (Test-Path $LastSuccessTimeFolder) {
-            $LastSuccessTimeValue = Get-ItemProperty -Path $LastSuccessTimeFolder -Name LastSuccessTime | Select-Object -ExpandProperty LastSuccessTime
-            if ($LastSuccessTimeValue) { 
-                try {
-                    $WsusStruct.LastSuccesTime = Get-LocalTime (Get-date "$LastSuccessTimeValue")
-                }
-                catch {
-                    Write-Log Verbose Warning 'Unable to use [System.TimeZoneInfo].'
-                    $WsusStruct.LastSuccesTime = Get-date "$LastSuccessTimeValue"
-                }
+
+    $LastSuccessTimeFolder = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Install'
+    if (Test-Path $LastSuccessTimeFolder) {
+        $LastSuccessTimeValue = Get-ItemProperty -Path $LastSuccessTimeFolder -Name LastSuccessTime | Select-Object -ExpandProperty LastSuccessTime
+        if ($LastSuccessTimeValue) { 
+            try {
+                $WsusStruct.LastSuccesTime = Get-LocalTime (Get-date "$LastSuccessTimeValue")
             }
-            else {
-                Write-Host 'String LastSuccessTime not found in the registry. This server was probably never updated or your custom WSUS Update solution does not create this string.'
-                $WsusStruct.LastSuccesTime = Get-date '2015-01-01 00:00:01'            
+            catch {
+                Write-Log Verbose Warning 'Unable to use [System.TimeZoneInfo].'
+                $WsusStruct.LastSuccesTime = Get-date "$LastSuccessTimeValue"
             }
         }
         else {
-            Write-Host 'Install key not found in the registry. This server was probably never updated or your custom WSUS Update solution does not create this key.'
-            $WsusStruct.LastSuccesTime = Get-date '2015-01-01 00:00:01'
+            Write-Host 'String LastSuccessTime not found in the registry. This server was probably never updated or your custom WSUS Update solution does not create this string.'
+            $WsusStruct.LastSuccesTime = Get-date '2015-01-01 00:00:01'            
         }
     }
+    else {
+        Write-Host 'Install key not found in the registry. This server was probably never updated or your custom WSUS Update solution does not create this key.'
+        $WsusStruct.LastSuccesTime = Get-date '2015-01-01 00:00:01'
+    }
+    
     $RebootRequiredKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
     if (Test-Path $RebootRequiredKey){ 
         $RebootRequired = $true
@@ -262,7 +258,46 @@ Function Search-Updates {
         $Total = $Other = 0
     }
     $WsusStruct.ReturnString =''
-    if (([System.Environment]::OSVersion.Version).Major -lt 10){
+    $WarningLimit = ($WsusStruct.LastSuccesTime).AddDays($WsusStruct.DaysBeforeWarning)
+    $CriticalLimit = ($WsusStruct.LastSuccesTime).AddDays($WsusStruct.DaysBeforeCritical)
+    $LastSuccesTimeStr = ($WsusStruct.LastSuccesTime).ToString('yyyy/MM/dd HH:mm:ss')
+    if($CriticalLimit -lt (Get-Date)) {
+        $WsusStruct.ReturnString += "CRITICAL: Last successful update at $LastSuccesTimeStr exceeded critical threshold of $($WsusStruct.DaysBeforeCritical) days. " 
+        $WsusStruct.Exitcode = 2
+    }
+    elseif($WarningLimit -lt (Get-Date)) {
+        $WsusStruct.ReturnString += "WARNING: Last successful update at $LastSuccesTimeStr exceeded warning threshold of $($WsusStruct.DaysBeforeWarning) days. " 
+        $WsusStruct.Exitcode = 1
+    }
+    elseif ($RebootRequired) {
+        $WsusStruct.ReturnString += "WARNING: Reboot required. Last successful update: $LastSuccesTimeStr. "
+        $WsusStruct.Exitcode = 1
+    }
+    else {
+        $WsusStruct.ReturnString += "OK: Last successful update: $LastSuccesTimeStr. "
+        $WsusStruct.Exitcode = 0
+    }
+    $WsusStruct.ReturnString += "Pending updates {Total: $Total {Critical: $Critical}{Important: $Important}{Other: $Other}}"
+}
+
+Function Search-WithPSWindowsUpdate {
+    Try {
+        Import-Module PSWindowsUpdate   
+    } 
+    catch {
+        Write-Log Verbose Info 'Something went wrong while importing Powershell module PSWindowsUpdate.'
+    }
+    #$VerbosePreference = 'Continue'
+    $WsusStruct.NumberOfUpdates = ((Get-WUInstall -ListOnly -Notcategory 'Driver') | Measure-Object).count
+    $Date = (Get-WUHistory | Measure-Object Date -Maximum).Maximum
+    Write-Log Verbose Info "Date: $Date"
+    try { 
+        #$Culture = New-Object system.globalization.cultureinfo('en-US')
+        # ($Culture.DateTimeFormat.ShortDatePattern)
+        # $WsusStruct.LastSuccesTime = Get-LocalTime (Get-date "$((Get-WUHistory | Measure-Object Date -Maximum).Maximum)" -format 'MM/dd/YYYY HH:mm:ss')
+        $WsusStruct.LastSuccesTime = [datetime]::ParseExact('13/01/2016 18:26:22','dd/MM/yyyy HH:mm:ss',$null)
+        Write-Log Verbose Info "Last succesful update installation date: $($WsusStruct.LastSuccesTime)"
+        $WsusStruct.ReturnString =''
         $WarningLimit = ($WsusStruct.LastSuccesTime).AddDays($WsusStruct.DaysBeforeWarning)
         $CriticalLimit = ($WsusStruct.LastSuccesTime).AddDays($WsusStruct.DaysBeforeCritical)
         $LastSuccesTimeStr = ($WsusStruct.LastSuccesTime).ToString('yyyy/MM/dd HH:mm:ss')
@@ -283,11 +318,11 @@ Function Search-Updates {
             $WsusStruct.Exitcode = 0
         }
     }
-    else { 
-        $WsusStruct.ReturnString += 'Unable to detect last successful update. '
-        $WsusStruct.Exitcode = 0
+    catch {
+        Write-Log Verbose Info "Something went wrong with the date conversion. Culture is $((Get-Culture).Name)"
     }
-    $WsusStruct.ReturnString += "Pending updates {Total: $Total {Critical: $Critical}{Important: $Important}{Other: $Other}}"
+
+    $WsusStruct.ReturnString += "Pending updates {Total: $($WsusStruct.NumberOfUpdates)}"
 }
 
 #endregion Functions
@@ -299,9 +334,22 @@ if ($Args) {
         if($Args.count -ge 1){Initialize-Args $Args}
     }
 }
-Search-Updates
+if ($WsusStruct.Method -eq 'PsWindowsUpdate') {
+    Search-WithPSWindowsUpdate
+}
+else {
+    if (([System.Environment]::OSVersion.Version).Major -ge 10){  
+        Write-Log Verbose Info 'Windows 10 or later has no LastSuccessTime in the registry. Please use PSWindowsUpdate as method.'     
+        $WsusStruct.Exitcode = 3
+        $WsusStruct.ReturnString = 'UNKNOWN: Windows 10 or later detected. Please use PSWindowsUpdate method.'
+    }
+    else {
+        Search-WithUpdateSearcher
+    } 
+}
+
 Write-Host $WsusStruct.ReturnString
 $WsusDuration = New-TimeSpan –Start $WsusStruct.CheckStart –End (Get-Date)
 $WsusStruct.CheckDuration = '{0:HH:mm:ss.fff}' -f ([datetime]$WsusDuration.Ticks)   
-Write-Log verbose Info "Check took $($WsusStruct.CheckDuration) seconds."
+Write-Log Verbose Info "Check took $($WsusStruct.CheckDuration) seconds."
 exit $WsusStruct.Exitcode
