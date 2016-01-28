@@ -1,8 +1,8 @@
 ﻿# Script name:      check_ms_win_updates.ps1
-# Version:	        v2.02.160128
+# Version:          v2.03.160128
 # Created on:       12/05/2015
-# Author:	        D'Haese Willem
-# Purpose:	        Checks a Microsoft Windows Server for pending updates and alert in Nagios style output if a number of days is exceeded.
+# Author:           D'Haese Willem
+# Purpose:          Checks a Microsoft Windows Server for pending updates and alert in Nagios style output if a number of days is exceeded.
 # On Github:        https://github.com/willemdh/check_ms_win_updates
 # On OutsideIT:     http://outsideit.net/check-ms-win-updates
 # Recent History:
