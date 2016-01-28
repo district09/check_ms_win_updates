@@ -1,16 +1,16 @@
 ﻿# Script name:      check_ms_win_updates.ps1
-# Version:	        v2.01.160119
+# Version:	        v2.02.160128
 # Created on:       12/05/2015
 # Author:	        D'Haese Willem
 # Purpose:	        Checks a Microsoft Windows Server for pending updates and alert in Nagios style output if a number of days is exceeded.
 # On Github:        https://github.com/willemdh/check_ms_win_updates
 # On OutsideIT:     http://outsideit.net/check-ms-win-updates
 # Recent History:
-#   07/09/15 => Convert lastsuccessful update date to local timezone and only removes cachefile when reboot required if cache older then 1 hour.
 #   12/11/15 => Check if registry string lastsuccesstime exists
 #   06/12/15 => Prepare for Windows 10 support with PSWindowsUpdate
 #   07/12/15 => Output to VerboseOther OS
 #   19/01/16 => PSWindowsUpdate Method
+#   28/01/16 => Added WarningAction SilentlyContinue to get-WUInstall to prevent rebootrequired warnings
 # Copyright:
 #   This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published
 #   by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. This program is distributed 
@@ -281,26 +281,27 @@ Function Search-WithUpdateSearcher {
 }
 
 Function Search-WithPSWindowsUpdate {
+    Write-Log Verbose Info "Querying WSUS updates with $($WsusStruct.Method) method."
     Try {
         Import-Module PSWindowsUpdate   
     } 
     catch {
         Write-Log Verbose Info 'Something went wrong while importing Powershell module PSWindowsUpdate.'
+        $WsusStruct.ReturnString = 'UNKNOWN: Unable to import module PSWindowsUpdate.'
+        $WsusStruct.Exitcode = 3
+        return
     }
-    #$VerbosePreference = 'Continue'
-    $WsusStruct.NumberOfUpdates = ((Get-WUInstall -ListOnly -Notcategory 'Driver') | Measure-Object).count
+    $WsusStruct.NumberOfUpdates = ((Get-WUInstall -ListOnly -Notcategory 'Driver' -WarningAction SilentlyContinue) | Measure-Object).count
     $Date = (Get-WUHistory | Measure-Object Date -Maximum).Maximum
     Write-Log Verbose Info "Date: $Date"
     try { 
-        #$Culture = New-Object system.globalization.cultureinfo('en-US')
-        # ($Culture.DateTimeFormat.ShortDatePattern)
-        # $WsusStruct.LastSuccesTime = Get-LocalTime (Get-date "$((Get-WUHistory | Measure-Object Date -Maximum).Maximum)" -format 'MM/dd/YYYY HH:mm:ss')
         $WsusStruct.LastSuccesTime = [datetime]::ParseExact('13/01/2016 18:26:22','dd/MM/yyyy HH:mm:ss',$null)
         Write-Log Verbose Info "Last succesful update installation date: $($WsusStruct.LastSuccesTime)"
         $WsusStruct.ReturnString =''
         $WarningLimit = ($WsusStruct.LastSuccesTime).AddDays($WsusStruct.DaysBeforeWarning)
         $CriticalLimit = ($WsusStruct.LastSuccesTime).AddDays($WsusStruct.DaysBeforeCritical)
         $LastSuccesTimeStr = ($WsusStruct.LastSuccesTime).ToString('yyyy/MM/dd HH:mm:ss')
+        $RebootRequired = Get-WURebootStatus -Silent
         if($CriticalLimit -lt (Get-Date)) {
             $WsusStruct.ReturnString += "CRITICAL: Last successful update at $LastSuccesTimeStr exceeded critical threshold of $($WsusStruct.DaysBeforeCritical) days. " 
             $WsusStruct.Exitcode = 2
