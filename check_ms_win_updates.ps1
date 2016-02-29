@@ -1,16 +1,16 @@
 ﻿# Script name:      check_ms_win_updates.ps1
-# Version:          v2.04.160214
+# Version:          v2.05.160229
 # Created on:       12/05/2015
 # Author:           D'Haese Willem
 # Purpose:          Checks a Microsoft Windows Server for pending updates and alert in Nagios style output if a number of days is exceeded.
 # On Github:        https://github.com/willemdh/check_ms_win_updates
 # On OutsideIT:     https://outsideit.net/check-ms-win-updates
 # Recent History:
-#   06/12/15 => Prepare for Windows 10 support with PSWindowsUpdate
 #   07/12/15 => Output to VerboseOther OS
 #   19/01/16 => PSWindowsUpdate Method
 #   28/01/16 => Added WarningAction SilentlyContinue to get-WUInstall to prevent rebootrequired warnings
 #   14/02/16 => Date parsing fix
+#   29/02/16 => Only alert when total updates > 0
 # Copyright:
 #   This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published
 #   by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. This program is distributed 
@@ -261,11 +261,11 @@ Function Search-WithUpdateSearcher {
     $WarningLimit = ($WsusStruct.LastSuccesTime).AddDays($WsusStruct.DaysBeforeWarning)
     $CriticalLimit = ($WsusStruct.LastSuccesTime).AddDays($WsusStruct.DaysBeforeCritical)
     $LastSuccesTimeStr = ($WsusStruct.LastSuccesTime).ToString('yyyy/MM/dd HH:mm:ss')
-    if($CriticalLimit -lt (Get-Date)) {
+    if($Total -ge 1 -and $CriticalLimit -lt (Get-Date)) {
         $WsusStruct.ReturnString += "CRITICAL: Last successful update at $LastSuccesTimeStr exceeded critical threshold of $($WsusStruct.DaysBeforeCritical) days. " 
         $WsusStruct.Exitcode = 2
     }
-    elseif($WarningLimit -lt (Get-Date)) {
+    elseif($Total -ge 1 -and $WarningLimit -lt (Get-Date)) {
         $WsusStruct.ReturnString += "WARNING: Last successful update at $LastSuccesTimeStr exceeded warning threshold of $($WsusStruct.DaysBeforeWarning) days. " 
         $WsusStruct.Exitcode = 1
     }
@@ -303,11 +303,11 @@ Function Search-WithPSWindowsUpdate {
         $LastSuccesTimeStr = ($WsusStruct.LastSuccesTime).ToString('yyyy/MM/dd HH:mm:ss')
         Write-Log Verbose Info "LastSuccesTimeStr yyyy/MM/dd HH:mm:ss: $LastSuccesTimeStr"
         $RebootRequired = Get-WURebootStatus -Silent
-        if($CriticalLimit -lt (Get-Date)) {
+        if($WsusStruct.NumberOfUpdates -ge 1 -and $CriticalLimit -lt (Get-Date)) {
             $WsusStruct.ReturnString += "CRITICAL: Last successful update at $LastSuccesTimeStr exceeded critical threshold of $($WsusStruct.DaysBeforeCritical) days. " 
             $WsusStruct.Exitcode = 2
         }
-        elseif($WarningLimit -lt (Get-Date)) {
+        elseif($WsusStruct.NumberOfUpdates -ge 1 -and $WarningLimit -lt (Get-Date)) {
             $WsusStruct.ReturnString += "WARNING: Last successful update at $LastSuccesTimeStr exceeded warning threshold of $($WsusStruct.DaysBeforeWarning) days. " 
             $WsusStruct.Exitcode = 1
         }
