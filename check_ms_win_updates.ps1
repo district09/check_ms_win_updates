@@ -1,40 +1,41 @@
 ﻿# Script name:      check_ms_win_updates.ps1
-# Version:          v2.05.160229
+# Version:          v3.01.170220
 # Created on:       12/05/2015
-# Author:           D'Haese Willem
+# Author:           Willem D'Haese
 # Purpose:          Checks a Microsoft Windows Server for pending updates and alert in Nagios style output if a number of days is exceeded.
 # On Github:        https://github.com/willemdh/check_ms_win_updates
-# On OutsideIT:     https://outsideit.net/check-ms-win-updates
+# On OutsideIT:     https://outsideit.net/monitoring-windows-updates/
 # Recent History:
-#   07/12/15 => Output to VerboseOther OS
-#   19/01/16 => PSWindowsUpdate Method
-#   28/01/16 => Added WarningAction SilentlyContinue to get-WUInstall to prevent rebootrequired warnings
+#   28/01/16 => Added WaningAction SilentlyContinue to get-WUInstall to prevent rebootrequired warnings
 #   14/02/16 => Date parsing fix
 #   29/02/16 => Only alert when total updates > 0
+#   07/03/16 => Moved cache folder level higher
+#   20/02/17 => PSSharpening, Cleanup, $Struct and duration
 # Copyright:
 #   This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published
 #   by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. This program is distributed 
 #   in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A 
 #   PARTICULAR PURPOSE. See the GNU General Public License for more details. You should have received a copy of the GNU General Public 
-#   License along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#   License along with this program.  If not, see <http://www.gnu.org/licenses
 
-$WsusStruct = New-object PSObject -Property @{
-    CheckStart = (Get-Date -Format 'yyyy/MM/dd HH:mm:ss.fff');
-    CheckEnd = '';
-    CheckDuration = '';
-    Exitcode = 3;
-    Method = 'UpdateSearcher';
-    UpdateCacheFile = 'C:\Program Files\NSClient++\scripts\powershell\cache\check_ms_win_updates_cache.xml';
-    UpdateCacheExpireHours = 24;
-    LastSuccesTime = '';
-    DaysBeforeWarning = 120;
-    DaysBeforeCritical = 150;
-    NumberOfUpdates = '';
+$DebugPreference = 'SilentlyContinue'
+$VerbosePreference = 'SilentlyContinue'
+
+$Struct = New-object PSObject -Property @{
+    StopWatch = [Diagnostics.Stopwatch]::StartNew()
+    Duration = ''
+    Exitcode = 3
+    Method = 'UpdateSearcher'
+    UpdateCacheFile = 'C:\Program Files\NSClient++\scripts\cache\check_ms_win_updates_cache.xml'
+    UpdateCacheExpireHours = 24
+    LastSuccesTime = ''
+    DaysBeforeWarning = 120
+    DaysBeforeCritical = 150
+    NumberOfUpdates = ''
     ReturnString = 'UNKNOWN: Please debug the script...'
 }
 
-[void][System.Reflection.Assembly]::LoadWithPartialName('System.Core')
-$VerbosePreference = 'SilentlyContinue'
+[void][Reflection.Assembly]::LoadWithPartialName('System.Core')
 
 #region Functions
 Function Initialize-Args {
@@ -61,7 +62,7 @@ Function Initialize-Args {
             switch -regex -casesensitive ($CurrentArg) {
                 "^(-wd|--Warning-Days)$" {
                     if (($value -match "^[\d]+$") -and ([int]$value -lt 1000)) {
-                        $WsusStruct.DaysBeforeWarning = $value
+                        $Struct.DaysBeforeWarning = $value
                     } else {
                         throw "Warning treshold should be numeric and less than 1000. Value given is $value."
                     }
@@ -69,7 +70,7 @@ Function Initialize-Args {
                 }
                 "^(-cd|--Critical-Days)$" {
                     if (($value -match "^[\d]+$") -and ([int]$value -lt 1000)) {
-                        $WsusStruct.DaysBeforeCritical = $value
+                        $Struct.DaysBeforeCritical = $value
                     } else {
                         throw "Critical treshold should be numeric and less than 1000. Value given is $value."
                     }
@@ -77,7 +78,7 @@ Function Initialize-Args {
                 }
                 "^(-M|--Method)$" {
                     if ($value -match "(^PSWindowsUpdate$)|(^UpdateSearcher$)") {
-                        $WsusStruct.Method = $value
+                        $Struct.Method = $value
                     } else {
                         throw "Method `"$value`" does not meet regex requirements."
                     }
@@ -103,7 +104,7 @@ Function Test-Strings {
     $BadChars | ForEach-Object {
         If ( $String.Contains("$_") ) {
             Write-Host "Error: String `"$String`" contains illegal characters."
-            Exit $WsusStruct.ExitCode
+            Exit $Struct.ExitCode
         }
     }
     Return $true
@@ -132,7 +133,7 @@ function Write-Log {
             $Ip = $IpOrHost
         }
         else {
-            $Ip = ([System.Net.Dns]::GetHostAddresses($IpOrHost)).IPAddressToString
+            $Ip = ([Net.Dns]::GetHostAddresses($IpOrHost)).IPAddressToString
         }
         Try {
             $JsonObject = (New-Object PSObject | Add-Member -PassThru NoteProperty logdestination $Log | Add-Member -PassThru NoteProperty logtime $Now| Add-Member -PassThru NoteProperty severity $Severity | Add-Member -PassThru NoteProperty message $Message ) | ConvertTo-Json
@@ -146,7 +147,7 @@ function Write-Log {
             $Socket.Close()
         }
         catch {
-            Write-Host "${Now}: Error: Something went wrong while trying to send message to Logstash server `"$Log`"."
+            Write-Host "${Now}: Error: Something went wrong while trying to send message to Logstash server `"$Log`"."
         }
         Write-Host "${Now}: ${Severity}: Ip: $Ip Port: $Port JsonString: $JsonString"
     }
@@ -176,27 +177,27 @@ function Write-Log {
 Function Write-Help {
     Write-Host @"
 check_ms_win_updates.ps1:
-This script is designed to check a Microsoft Windows Server for pending updates and alert in Nagios style output if a number of days is exceeded.
+This script is designed to check a Microsoft Windows host for pending updates and alert in Nagios style output if a number of days is exceeded.
 Arguments:
     -wd | --Warning-Days    => Number of days since last succesful WSUS update to return a warning state
     -cd | --Critical-Days   => Number of days since last succesful WSUS update to return a critical state
-    -M  | --Method          => Method to count the WSUS update
+    -M  | --Method          => Method to count the WSUS update. 'PsWindowsUpdate' or 'UpdateSearcher' (default).
     -h  | --Help            => Print this help output.
 "@
-    Exit $WsusStruct.ExitCode;
+    Exit $Struct.ExitCode
 } 
 Function Get-LocalTime {
     param (
         [parameter(Mandatory=$true)]$UTCTime
     ) 
     $strCurrentTimeZone = (Get-WmiObject win32_timezone).StandardName
-    $TZ = [System.TimeZoneInfo]::FindSystemTimeZoneById($strCurrentTimeZone)
-    $LocalTime = [System.TimeZoneInfo]::ConvertTimeFromUtc($UTCTime, $TZ)
+    $TZ = [TimeZoneInfo]::FindSystemTimeZoneById($strCurrentTimeZone)
+    $LocalTime = [TimeZoneInfo]::ConvertTimeFromUtc($UTCTime, $TZ)
     Return $LocalTime
-}
+} 
 Function Search-WithUpdateSearcher { 
-    if (!(Test-path -Path 'C:\Program Files\NSClient++\scripts\powershell\cache')){
-        New-Item -Path 'C:\Program Files\NSClient++\scripts\powershell\cache' -Type directory -Force | Out-Null
+    if (!(Test-path -Path 'C:\Program Files\NSClient++\scripts\cache')){
+        New-Item -Path 'C:\Program Files\NSClient++\scripts\cache' -Type directory -Force | Out-Null
     }
 
     $LastSuccessTimeFolder = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Install'
@@ -204,39 +205,39 @@ Function Search-WithUpdateSearcher {
         $LastSuccessTimeValue = Get-ItemProperty -Path $LastSuccessTimeFolder -Name LastSuccessTime | Select-Object -ExpandProperty LastSuccessTime
         if ($LastSuccessTimeValue) { 
             try {
-                $WsusStruct.LastSuccesTime = Get-LocalTime (Get-date "$LastSuccessTimeValue")
+                $Struct.LastSuccesTime = Get-LocalTime (Get-date "$LastSuccessTimeValue")
             }
             catch {
                 Write-Log Verbose Warning 'Unable to use [System.TimeZoneInfo].'
-                $WsusStruct.LastSuccesTime = Get-date "$LastSuccessTimeValue"
+                $Struct.LastSuccesTime = Get-date "$LastSuccessTimeValue"
             }
         }
         else {
             Write-Host 'String LastSuccessTime not found in the registry. This server was probably never updated or your custom WSUS Update solution does not create this string.'
-            $WsusStruct.LastSuccesTime = Get-date '2015-01-01 00:00:01'            
+            $Struct.LastSuccesTime = Get-date '2015-01-01 00:00:01'            
         }
     }
     else {
         Write-Host 'Install key not found in the registry. This server was probably never updated or your custom WSUS Update solution does not create this key.'
-        $WsusStruct.LastSuccesTime = Get-date '2015-01-01 00:00:01'
+        $Struct.LastSuccesTime = Get-date '2015-01-01 00:00:01'
     }
     
     $RebootRequiredKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
     if (Test-Path $RebootRequiredKey){ 
         $RebootRequired = $true
-        if ((Test-Path $WsusStruct.UpdateCacheFile) -and (Get-Date) -gt ((Get-Item $WsusStruct.UpdateCacheFile).LastWriteTime.AddHours(1))) {
-            Remove-Item $WsusStruct.UpdateCacheFile | Out-Null
+        if ((Test-Path $Struct.UpdateCacheFile) -and (Get-Date) -gt ((Get-Item $Struct.UpdateCacheFile).LastWriteTime.AddHours(1))) {
+            Remove-Item $Struct.UpdateCacheFile | Out-Null
         }
     }
-    if (!(Test-Path $WsusStruct.UpdateCacheFile) -or (Get-Date) -gt ((Get-Item $WsusStruct.UpdateCacheFile).LastWriteTime.AddHours($WsusStruct.UpdateCacheExpireHours))) {
+    if (!(Test-Path $Struct.UpdateCacheFile) -or (Get-Date) -gt ((Get-Item $Struct.UpdateCacheFile).LastWriteTime.AddHours($Struct.UpdateCacheExpireHours))) {
         Write-Log verbose Info 'Cachefile not found or out of date. Creation initiated.'
         $UpdateSession = new-object -ComObject 'Microsoft.Update.Session'
         $Updates = $UpdateSession.CreateupdateSearcher().Search(('IsAssigned=1 and IsInstalled=0 and IsHidden=0'))
-        Export-Clixml -InputObject $Updates -Encoding UTF8 -Path $WsusStruct.UpdateCacheFile
+        Export-Clixml -InputObject $Updates -Encoding UTF8 -Path $Struct.UpdateCacheFile
     }
     else {
         Write-Log verbose Info 'Valid cachefile found.'
-        $Updates = Import-Clixml $WsusStruct.UpdateCacheFile
+        $Updates = Import-Clixml $Struct.UpdateCacheFile
     }
     $Total = ($updates.updates).count
     $Critical = ($Updates.updates | Where-Object { $_.MsrcSeverity -eq 'Critical' }).count
@@ -254,104 +255,106 @@ Function Search-WithUpdateSearcher {
     if (! $Other ) {
         $Other = 0
     }
+<#  On Windows 2003 this code results in 0 updates while there was in fact 1 update. Noticed other cases. To be investigated.
     if ($Total -eq 1 -and $Other -eq 1){
         $Total = $Other = 0
     }
-    $WsusStruct.ReturnString =''
-    $WarningLimit = ($WsusStruct.LastSuccesTime).AddDays($WsusStruct.DaysBeforeWarning)
-    $CriticalLimit = ($WsusStruct.LastSuccesTime).AddDays($WsusStruct.DaysBeforeCritical)
-    $LastSuccesTimeStr = ($WsusStruct.LastSuccesTime).ToString('yyyy/MM/dd HH:mm:ss')
+    Windows 2012 R2, it seems Total count is always 1 more. Wi'll need to triplecheck this and mplement os check
+#>
+    $Struct.ReturnString =''
+    $WarningLimit = ($Struct.LastSuccesTime).AddDays($Struct.DaysBeforeWarning)
+    $CriticalLimit = ($Struct.LastSuccesTime).AddDays($Struct.DaysBeforeCritical)
+    $LastSuccesTimeStr = ($Struct.LastSuccesTime).ToString('yyyy/MM/dd HH:mm:ss')
     if($Total -ge 1 -and $CriticalLimit -lt (Get-Date)) {
-        $WsusStruct.ReturnString += "CRITICAL: Last successful update at $LastSuccesTimeStr exceeded critical threshold of $($WsusStruct.DaysBeforeCritical) days. " 
-        $WsusStruct.Exitcode = 2
+        $Struct.ReturnString += "CRITICAL: Last successful update at $LastSuccesTimeStr exceeded critical threshold of $($Struct.DaysBeforeCritical) days. " 
+        $Struct.Exitcode = 2
     }
     elseif($Total -ge 1 -and $WarningLimit -lt (Get-Date)) {
-        $WsusStruct.ReturnString += "WARNING: Last successful update at $LastSuccesTimeStr exceeded warning threshold of $($WsusStruct.DaysBeforeWarning) days. " 
-        $WsusStruct.Exitcode = 1
+        $Struct.ReturnString += "WARNING: Last successful update at $LastSuccesTimeStr exceeded warning threshold of $($Struct.DaysBeforeWarning) days. " 
+        $Struct.Exitcode = 1
     }
     elseif ($RebootRequired) {
-        $WsusStruct.ReturnString += "WARNING: Reboot required. Last successful update: $LastSuccesTimeStr. "
-        $WsusStruct.Exitcode = 1
+        $Struct.ReturnString += "WARNING: Reboot required. Last successful update: $LastSuccesTimeStr. "
+        $Struct.Exitcode = 1
     }
     else {
-        $WsusStruct.ReturnString += "OK: Last successful update: $LastSuccesTimeStr. "
-        $WsusStruct.Exitcode = 0
+        $Struct.ReturnString += "OK: Last successful update: $LastSuccesTimeStr. "
+        $Struct.Exitcode = 0
     }
-    $WsusStruct.ReturnString += "Pending updates {Total: $Total {Critical: $Critical}{Important: $Important}{Other: $Other}}"
+    $Struct.ReturnString += "Pending updates {Total: $Total {Critical: $Critical}{Important: $Important}{Other: $Other}}"
 }
 
 Function Search-WithPSWindowsUpdate {
-    Write-Log Verbose Info "Querying WSUS updates with $($WsusStruct.Method) method."
+    Write-Log Verbose Info "Querying WSUS updates with $($Struct.Method) method."
     Try {
         Import-Module PSWindowsUpdate   
     } 
     catch {
         Write-Log Verbose Info 'Something went wrong while importing Powershell module PSWindowsUpdate.'
-        $WsusStruct.ReturnString = 'UNKNOWN: Unable to import module PSWindowsUpdate.'
-        $WsusStruct.Exitcode = 3
+        $Struct.ReturnString = 'UNKNOWN: Unable to import module PSWindowsUpdate.'
+        $Struct.Exitcode = 3
         return
     }
     try { 
-        $WsusStruct.NumberOfUpdates = ((Get-WUInstall -ListOnly -Notcategory 'Driver' -WarningAction SilentlyContinue) | Measure-Object).count
-        $WsusStruct.LastSuccesTime = [datetime](Get-WUHistory | Measure-Object Date -Maximum).Maximum
-        Write-Log Verbose Info "LastSuccesTime: $($WsusStruct.LastSuccesTime)"
- #       $WsusStruct.LastSuccesTime = [datetime]::ParseExact($Date,'dd/MM/yyyy HH:mm:ss',$null)
- #       Write-Log Verbose Info "Last succesful update installation date: $($WsusStruct.LastSuccesTime)"
-        $WsusStruct.ReturnString =''
-        $WarningLimit = ($WsusStruct.LastSuccesTime).AddDays($WsusStruct.DaysBeforeWarning)
-        $CriticalLimit = ($WsusStruct.LastSuccesTime).AddDays($WsusStruct.DaysBeforeCritical)
-        $LastSuccesTimeStr = ($WsusStruct.LastSuccesTime).ToString('yyyy/MM/dd HH:mm:ss')
+        $Struct.NumberOfUpdates = ((Get-WUInstall -ListOnly -Notcategory 'Driver' -WarningAction SilentlyContinue) | Measure-Object).count
+        $Struct.LastSuccesTime = [datetime](Get-WUHistory | Measure-Object Date -Maximum).Maximum
+        Write-Log Verbose Info "LastSuccesTime: $($Struct.LastSuccesTime)"
+        $Struct.ReturnString =''
+        $WarningLimit = ($Struct.LastSuccesTime).AddDays($Struct.DaysBeforeWarning)
+        $CriticalLimit = ($Struct.LastSuccesTime).AddDays($Struct.DaysBeforeCritical)
+        $LastSuccesTimeStr = ($Struct.LastSuccesTime).ToString('yyyy/MM/dd HH:mm:ss')
         Write-Log Verbose Info "LastSuccesTimeStr yyyy/MM/dd HH:mm:ss: $LastSuccesTimeStr"
         $RebootRequired = Get-WURebootStatus -Silent
-        if($WsusStruct.NumberOfUpdates -ge 1 -and $CriticalLimit -lt (Get-Date)) {
-            $WsusStruct.ReturnString += "CRITICAL: Last successful update at $LastSuccesTimeStr exceeded critical threshold of $($WsusStruct.DaysBeforeCritical) days. " 
-            $WsusStruct.Exitcode = 2
+        if($Struct.NumberOfUpdates -ge 1 -and $CriticalLimit -lt (Get-Date)) {
+            $Struct.ReturnString += "CRITICAL: Last successful update at $LastSuccesTimeStr exceeded critical threshold of $($Struct.DaysBeforeCritical) days. " 
+            $Struct.Exitcode = 2
         }
-        elseif($WsusStruct.NumberOfUpdates -ge 1 -and $WarningLimit -lt (Get-Date)) {
-            $WsusStruct.ReturnString += "WARNING: Last successful update at $LastSuccesTimeStr exceeded warning threshold of $($WsusStruct.DaysBeforeWarning) days. " 
-            $WsusStruct.Exitcode = 1
+        elseif($Struct.NumberOfUpdates -ge 1 -and $WarningLimit -lt (Get-Date)) {
+            $Struct.ReturnString += "WARNING: Last successful update at $LastSuccesTimeStr exceeded warning threshold of $($Struct.DaysBeforeWarning) days. " 
+            $Struct.Exitcode = 1
         }
         elseif ($RebootRequired) {
-            $WsusStruct.ReturnString += "WARNING: Reboot required. Last successful update: $LastSuccesTimeStr. "
-            $WsusStruct.Exitcode = 1
+            $Struct.ReturnString += "WARNING: Reboot required. Last successful update: $LastSuccesTimeStr. "
+            $Struct.Exitcode = 1
         }
         else {
-            $WsusStruct.ReturnString += "OK: Last successful update: $LastSuccesTimeStr. "
-            $WsusStruct.Exitcode = 0
+            $Struct.ReturnString += "OK: Last successful update: $LastSuccesTimeStr. "
+            $Struct.Exitcode = 0
         }
     }
-    catch {
+    Catch {
         Write-Log Verbose Info "Something went wrong with the date conversion. Culture is $((Get-Culture).Name)"
     }
-
-    $WsusStruct.ReturnString += "Pending updates {Total: $($WsusStruct.NumberOfUpdates)}"
+    $Struct.ReturnString += "Pending updates {Total: $($Struct.NumberOfUpdates)}"
 }
 
 #endregion Functions
 
-# Main block
+#region Main
 
-if ($Args) {
-    if(!($Args[0].ToString()).StartsWith("$")){
-        if($Args.count -ge 1){Initialize-Args $Args}
+If ( $Args ) {
+    If ( ! ( $Args[0].ToString()).StartsWith('$') ) {
+        If ( $Args.count -ge 1 ) {
+            Initialize-Args $Args
+        }
     }
 }
-if ($WsusStruct.Method -eq 'PsWindowsUpdate') {
+If ( $Struct.Method -eq 'PsWindowsUpdate' ) {
     Search-WithPSWindowsUpdate
 }
-else {
-    if (([System.Environment]::OSVersion.Version).Major -ge 10){  
+Else {
+    If ( ([Environment]::OSVersion.Version).Major -ge 10 ) {  
         Write-Log Verbose Info 'Windows 10 or later has no LastSuccessTime in the registry. Please use PSWindowsUpdate as method.'     
-        $WsusStruct.Exitcode = 3
-        $WsusStruct.ReturnString = 'UNKNOWN: Windows 10 or later detected. Please use PSWindowsUpdate method.'
+        $Struct.Exitcode = 3
+        $Struct.ReturnString = 'UNKNOWN: Windows 10 or later detected. Please use PSWindowsUpdate method.'
     }
-    else {
+    Else {
         Search-WithUpdateSearcher
     } 
 }
+$Struct.Duration = $Struct.StopWatch.Elapsed.TotalSeconds
+$Struct.ReturnString += " ($($Struct.Duration)s)"
+Write-Host $Struct.ReturnString
+Exit $Struct.Exitcode
 
-Write-Host $WsusStruct.ReturnString
-$WsusDuration = New-TimeSpan –Start $WsusStruct.CheckStart –End (Get-Date)
-$WsusStruct.CheckDuration = '{0:HH:mm:ss.fff}' -f ([datetime]$WsusDuration.Ticks)   
-Write-Log Verbose Info "Check took $($WsusStruct.CheckDuration) seconds."
-exit $WsusStruct.Exitcode
+#endregion Main
