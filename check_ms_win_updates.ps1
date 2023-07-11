@@ -367,27 +367,20 @@ If ( $Struct.Method -eq 'WMI') {
 ElseIf ( $Struct.Method -eq 'PsWindowsUpdate' ) {
     Search-WithPSWindowsUpdate
     }
-Else {
-If ( ([Environment]::OSVersion.Version).Major -ge 10 ) {
-    Write-Log Verbose Info 'Windows 10 or later has no LastSuccessTime in the registry. Using PSWindowsUpdate as method.'
-    $Struct.Method = 'PsWindowsUpdate'
-   }
-Else {
-  If (([System.Environment]::OSversion.Version).Major -le 6){
-    Write-Log Verbose Info "Windows 2008 or earlier has issues with UpdateSearcher. Using WMI as method."
-	$Struct.Method = "WMI"
-       }
-     }
-If ( $Struct.Method -eq 'PsWindowsUpdate' ) {
-    Search-WithPSWindowsUpdate
-    }
-Else { If ($Struct.Method -eq 'WMI'){
-        Search-WithWMI }
-  Else {
+ElseIf ($Struct.Method -eq 'UpdateSearcher') {
     Search-WithUpdateSearcher
-  }
- }
 }
+Else {
+    If ( ([Environment]::OSVersion.Version).Major -ge 10 ) {
+        Write-Log Verbose Info 'Windows 10 or later has no LastSuccessTime in the registry. Using PSWindowsUpdate as method.'
+        $Struct.Method = 'PsWindowsUpdate'
+    }
+    ElseIf (([System.Environment]::OSversion.Version).Major -le 6){
+        Write-Log Verbose Info "Windows 2008 or earlier has issues with UpdateSearcher. Using WMI as method."
+        $Struct.Method = "WMI"
+    }
+}
+
 $Struct.Duration = $Struct.StopWatch.Elapsed.TotalSeconds
 $Struct.ReturnString += " ($($Struct.Duration)s)"
 Write-Host $Struct.ReturnString
